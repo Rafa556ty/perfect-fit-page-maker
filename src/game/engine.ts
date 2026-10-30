@@ -114,7 +114,41 @@ const C = {
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
+export type RenderCar = {
+  x: number; y: number; w: number; h: number; rot: number;
+  type: CarType; hit?: boolean; signal: -1 | 1 | 0; signalTimer: number;
+};
+
+export type RenderParticle = { kind: Particle["kind"]; x: number; y: number; size: number; life: number; max: number; alpha: number; dark?: boolean };
+
+/** Read-only view of the simulation that a 3D renderer draws each frame. */
+export type RenderSnapshot = {
+  phase: EnginePhase;
+  mode: "free" | "police";
+  /** pixels per world metre; sim coordinates are pixels */
+  ppm: number;
+  roadCenterX: number;
+  baseY: number;
+  pz: number;
+  dt: number;
+  player: { x: number; rot: number; speed: number; w: number; h: number };
+  braking: boolean;
+  gas: boolean;
+  gear: number;
+  boostActive: boolean;
+  exhaustFlame: number;
+  highBeam: boolean;
+  shake: number;
+  flash: number;
+  traffic: readonly RenderCar[];
+  police: { x: number; y: number; w: number; h: number; rot: number; active: boolean };
+  particles: readonly RenderParticle[];
+};
+
 export class RacingEngine {
+  /** When set, the 2D canvas renderer is skipped and this draws the frame instead (3D mode). */
+  onRender?: (s: RenderSnapshot) => void;
+  private threeD = false;
   private ctx: CanvasRenderingContext2D;
   private W = 0;
   private H = 0;
@@ -217,6 +251,42 @@ export class RacingEngine {
     if (this.W) this.layout();
   }
 
+  /** 3D mode: true-to-scale distances (1 sim metre = 1 world metre) and a long view ahead. */
+  setThreeD(on: boolean) {
+    this.threeD = on;
+    if (this.W) this.layout();
+  }
+
+  /** Spacing unit for spawning and lane walls; matches the 2D game's gaps in 3D mode. */
+  private get spanM() {
+    return this.threeD ? this.lenM * 2.7 : this.lenM;
+  }
+
+  snapshot(dt: number): RenderSnapshot {
+    const p = this.player;
+    return {
+      phase: this.phase,
+      mode: this.mode,
+      ppm: this.laneW / 3.6,
+      roadCenterX: this.roadX + this.roadW / 2,
+      baseY: this.baseY,
+      pz: this.pz,
+      dt,
+      player: p,
+      braking: this.input.brake && this.phase === "playing",
+      gas: this.input.gas && this.phase === "playing",
+      gear: this.currentGear,
+      boostActive: this.boostActive,
+      exhaustFlame: this.exhaustFlameTimer,
+      highBeam: this.highBeamTimer > 0,
+      shake: this.shake,
+      flash: this.flash,
+      traffic: this.traffic,
+      police: { ...this.police, active: this.mode === "police" && this.police.active },
+      particles: this.particles,
+    };
+  }
+
   setMode(mode: "free" | "police") {
     this.mode = mode;
   }
@@ -256,7 +326,7 @@ export class RacingEngine {
     const p = this.player;
     p.w = this.carW;
     p.h = this.carW * (this.images.player.naturalHeight / this.images.player.naturalWidth);
-    this.k = (this.carW / 2.25) * SCROLL;
+    this.k = this.threeD ? this.laneW / 3.6 : (this.carW / 2.25) * SCROLL;
     this.lenM = p.h / this.k;
     this.baseY = this.H - this.bottomInset - p.h * 0.55 - 10;
 
@@ -267,6 +337,13 @@ export class RacingEngine {
     for (const t of this.traffic) {
       t.w = t.type === "bus" ? this.carW * 1.08 : this.carW * 0.95;
       t.h = t.w * (t.img.naturalHeight / t.img.naturalWidth);
+    }
+    if (this.threeD) {
+      // Real-world footprints in 3D (metres -> px): the models are scaled to these.
+      const ppm = this.laneW / 3.6;
+      p.w = 2.05 * ppm; p.h = 4.95 * ppm;
+      this.police.w = 1.95 * ppm; this.police.h = 4.8 * ppm;
+      this.lenM = p.h / this.k;
     }
   }
 
@@ -331,7 +408,8 @@ export class RacingEngine {
       if (!this.W || !this.H) return;
       try {
         this.update(dt);
-        this.render();
+        if (this.onRender) this.onRender(this.snapshot(dt));
+        else this.render();
       } catch (err) {
         console.warn("frame error", err);
       }
@@ -849,7 +927,7 @@ export class RacingEngine {
     for (const t of this.traffic) byLane[t.lane]?.push(t);
     for (const lane of byLane) lane.sort((a, b) => b.z - a.z);
 
-    const caps = wallSpeedCaps(this.traffic, this.lenM * WALL_LEN);
+    const caps = wallSpeedCaps(this.traffic, this.spanM * WALL_LEN);
     const capOf = new Map(this.traffic.map((t, i) => [t, caps[i] ?? Infinity]));
 
     for (const lane of byLane) {
@@ -941,28 +1019,34 @@ export class RacingEngine {
       }
     }
 
-    const behindLimit = this.H + 260;
-    const aheadLimit = -this.H * 1.6;
+    const behindLimit = this.threeD ? this.baseY + 40 * this.k : this.H + 260;
+    const aheadLimit = this.threeD ? this.baseY - 230 * this.k : -this.H * 1.6;
     this.traffic = this.traffic.filter((t) => t.y < behindLimit && t.y > aheadLimit);
   }
 
   private spawn() {
-    const aheadM = (this.baseY + 260) / this.k;
+    const aheadM = this.threeD ? 190 : (this.baseY + 260) / this.k;
     let guard = 0;
     while (this.nextSpawnZ < this.pz + aheadM && guard++ < 8) {
       this.trySpawn(this.nextSpawnZ);
-      const base = Math.max(this.lenM * 1.25, this.lenM * 3.4 - (this.distance / 700) * this.lenM);
+      const L = this.spanM;
+      const base = Math.max(L * 1.25, L * 3.4 - (this.distance / 700) * L);
       this.nextSpawnZ += base * rnd(0.75, 1.45);
     }
   }
 
   private trySpawn(z: number) {
-    const blocked = blockedLanes(this.traffic, z, this.lenM * WALL_LEN);
+    const blocked = blockedLanes(this.traffic, z, this.spanM * WALL_LEN);
     const free = [0, 1, 2].filter((l) => !blocked.has(l));
     if (free.length <= 1) return; // Keep at least one clear lane open!
 
     // Vehicle types palette
-    const vehiclePool: { type: CarType; img: HTMLImageElement; minSpeed: number; maxSpeed: number; preferredLane?: number }[] = [
+    const vehiclePool: { type: CarType; img: HTMLImageElement; minSpeed: number; maxSpeed: number; preferredLane?: number }[] = this.threeD ? [
+      { type: "m5", img: this.images.m5, minSpeed: 110, maxSpeed: 170 },
+      { type: "mustang-blue", img: this.images.mustangBlue, minSpeed: 100, maxSpeed: 160 },
+      { type: "mustang-black", img: this.images.mustangBlack, minSpeed: 100, maxSpeed: 160 },
+      { type: "jesko", img: this.images.m5, minSpeed: 160, maxSpeed: 215, preferredLane: 2 },
+    ] : [
       { type: "sedan", img: this.images.sedan, minSpeed: 85, maxSpeed: 115 },
       { type: "hatch", img: this.images.hatch, minSpeed: 80, maxSpeed: 110 },
       { type: "pickup", img: this.images.pickup, minSpeed: 80, maxSpeed: 105 },
