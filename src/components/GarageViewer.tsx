@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type * as THREE from "three";
 import { X } from "lucide-react";
-import carModelAsset from "@/assets/revuelto-3d.glb.asset.json";
+import carModelAsset from "@/assets/models/revuelto.glb.asset.json";
 import { Button } from "@/components/ui/button";
 
 export type GarageLabels = {
