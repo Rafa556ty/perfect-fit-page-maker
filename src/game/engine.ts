@@ -335,6 +335,7 @@ export class RacingEngine {
     this.police.h = this.police.w * (this.images.police.naturalHeight / this.images.police.naturalWidth);
 
     for (const t of this.traffic) {
+      if (this.threeD) continue;
       t.w = t.type === "bus" ? this.carW * 1.08 : this.carW * 0.95;
       t.h = t.w * (t.img.naturalHeight / t.img.naturalWidth);
     }
@@ -1063,7 +1064,10 @@ export class RacingEngine {
       lane = pick.preferredLane;
     }
 
-    const w = pick.type === "bus" ? this.carW * 1.05 : this.carW * 0.94;
+    const ppm = this.laneW / 3.6;
+    const dims3d: Partial<Record<CarType, [number, number]>> = { m5: [1.95, 4.8], "mustang-blue": [1.92, 4.8], "mustang-black": [1.92, 4.8], jesko: [2.05, 4.6] };
+    const d3 = this.threeD ? dims3d[pick.type] : undefined;
+    const w = d3 ? d3[0] * ppm : pick.type === "bus" ? this.carW * 1.05 : this.carW * 0.94;
     const cruise = rnd(pick.minSpeed, pick.maxSpeed) + Math.min(25, this.distance / 400);
 
     this.traffic.push({
@@ -1071,7 +1075,7 @@ export class RacingEngine {
       y: -220,
       z,
       w,
-      h: w * (pick.img.naturalHeight / pick.img.naturalWidth),
+      h: d3 ? d3[1] * ppm : w * (pick.img.naturalHeight / pick.img.naturalWidth),
       lane,
       targetLane: lane,
       speed: cruise,
