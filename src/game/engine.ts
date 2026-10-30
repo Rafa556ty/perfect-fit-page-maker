@@ -790,7 +790,7 @@ export class RacingEngine {
       const gapNow = this.pz - pol.z;
       const ps = this.player.speed;
       if (this.phase === "busted") {
-        // Roadblock done: the GT3 RS brakes to a stop in front, no crash
+        // Roadblock done: the police car brakes to a stop in front, no crash
         pol.speed = Math.max(0, pol.speed - 150 * dt);
         pol.lane = pLane;
         this.player.spin = 0;
