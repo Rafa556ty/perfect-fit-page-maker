@@ -79,6 +79,8 @@ const triggerHaptic = (pattern: number | number[]) => {
 export function RacingGame() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvas3dRef = useRef<HTMLCanvasElement>(null);
+  const flashRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RacingEngine | null>(null);
   const audioRef = useRef<GameAudio | null>(null);
 
@@ -179,6 +181,7 @@ export function RacingGame() {
     audioRef.current = audio;
 
     let ro: ResizeObserver | null = null;
+    let scene3d: import("@/game/render3d").Scene3D | null = null;
 
     Promise.all([
       loadImage(revueltoImg),
@@ -244,13 +247,26 @@ export function RacingGame() {
           );
 
           engineRef.current = engine;
+          engine.setThreeD(true);
           engine.setBottomInset(CONTROLS_H);
           const el = containerRef.current;
           engine.resize(el.clientWidth, el.clientHeight);
 
-          ro = new ResizeObserver(() =>
-            engine.resize(el.clientWidth, el.clientHeight),
-          );
+          // 3D renderer draws the engine's state every frame.
+          void import("@/game/render3d").then(({ Scene3D }) => {
+            if (disposed || !canvas3dRef.current) return;
+            const scene = new Scene3D(canvas3dRef.current, flashRef.current, () => {
+              el.dataset.sceneReady = "true";
+            });
+            scene3d = scene;
+            scene.resize(el.clientWidth, el.clientHeight);
+            engine.onRender = scene.render;
+          });
+
+          ro = new ResizeObserver(() => {
+            engine.resize(el.clientWidth, el.clientHeight);
+            scene3d?.resize(el.clientWidth, el.clientHeight);
+          });
           ro.observe(el);
 
           engine.run();
@@ -266,6 +282,7 @@ export function RacingGame() {
       ro?.disconnect();
       engineRef.current?.stop();
       engineRef.current = null;
+      scene3d?.dispose();
       audio.dispose();
       audioRef.current = null;
     };
@@ -370,7 +387,9 @@ export function RacingGame() {
       onPointerDown={() => audioRef.current?.unlock()}
     >
       <div ref={containerRef} className="relative h-full w-full max-w-[500px] overflow-hidden select-none">
-        <canvas ref={canvasRef} className="absolute inset-0 block touch-none" />
+        <canvas ref={canvasRef} className="hidden" />
+        <canvas ref={canvas3dRef} className="absolute inset-0 block h-full w-full touch-none" />
+        <div ref={flashRef} className="pointer-events-none absolute inset-0 bg-foreground opacity-0" />
 
         {/* HUD - Top Bar */}
         {(playing || phase === "over") && (
