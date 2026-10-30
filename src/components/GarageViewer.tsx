@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type * as THREE from "three";
 import { X } from "lucide-react";
-import carModelAsset from "@/assets/revuelto-3d.glb.asset.json";
+import carModelAsset from "@/assets/models/revuelto.glb.asset.json";
 import { Button } from "@/components/ui/button";
 
 export type GarageLabels = {
@@ -141,6 +141,9 @@ export function GarageViewer({
       scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a1208, 0.55));
 
       const loader = new GLTFLoader();
+      const { MeshoptDecoder } = await import("three/addons/libs/meshopt_decoder.module.js");
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      const { paintRevuelto } = await import("@/game/models3d");
       const buffer = await fetchModel(setProgress);
       if (disposed) return;
 
@@ -150,6 +153,7 @@ export function GarageViewer({
       if (disposed) return;
 
       const car = gltf.scene;
+      paintRevuelto(car);
       // glTF is always Y up and this file's root node already carries the
       // exporter's axis conversion, so the model needs no re-orientation here.
 
