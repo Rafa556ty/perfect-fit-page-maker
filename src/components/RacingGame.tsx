@@ -256,7 +256,7 @@ export function RacingGame() {
           void import("@/game/render3d").then(({ Scene3D }) => {
             if (disposed || !canvas3dRef.current) return;
             const scene = new Scene3D(canvas3dRef.current, flashRef.current, () => {
-              el.dataset.sceneReady = "true";
+              el.dataset["sceneReady"] = "true";
             });
             scene3d = scene;
             scene.resize(el.clientWidth, el.clientHeight);

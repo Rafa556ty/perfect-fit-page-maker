@@ -619,8 +619,6 @@ export class Scene3D {
       geo.rotateX(Math.PI / 2);
       // cylinder uv.y runs 0 at bottom (wide base) to 1 at top; after the
       // rotation the base sits at the tip — flip so 0 = tip.
-      const uv = geo.attributes.uv as THREE.BufferAttribute;
-      for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i));
       const mat = new THREE.ShaderMaterial({
         vertexShader: flameVert,
         fragmentShader: flameFrag,
@@ -994,8 +992,8 @@ export class Scene3D {
       // keep the glow sprite round despite the group's z stretch
       f.glow.scale.set(0.55 * flick, 0.55 * flick, 0.55 / L);
       for (const mat of [f.outer, f.core]) {
-        mat.uniforms.uTime!.value = this.time;
-        mat.uniforms.uIntensity!.value = this.flameAmt * flick * 1.4;
+        mat.uniforms["uTime"]!.value = this.time;
+        mat.uniforms["uIntensity"]!.value = this.flameAmt * flick * 1.4;
       }
       f.light.intensity = this.flameAmt * flick * 14;
     }
@@ -1044,7 +1042,7 @@ export class Scene3D {
       a[o + 5]! += rush;
       if (a[o + 1]! < 0 || a[o + 2]! > 10) this.resetDrop(i, false);
     }
-    (this.rain.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    (this.rain.geometry.attributes["position"] as THREE.BufferAttribute).needsUpdate = true;
   }
 
   dispose() {
