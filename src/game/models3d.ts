@@ -147,6 +147,7 @@ function batchCar(root: THREE.Group): THREE.Group {
     // Meshopt may quantize the same attribute differently on separate parts.
     // Read normalized values before merging, so no car parts disappear.
     for (const [name, attribute] of Object.entries(geo.attributes)) {
+      if (!(attribute instanceof THREE.BufferAttribute) && !(attribute instanceof THREE.InterleavedBufferAttribute)) continue;
       const values = new Float32Array(attribute.count * attribute.itemSize);
       for (let i = 0; i < attribute.count; i++) {
         for (let component = 0; component < attribute.itemSize; component++) {
