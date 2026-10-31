@@ -6,7 +6,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
-import revueltoAsset from "@/assets/models/revuelto-mobile.glb.asset.json";
+import revueltoAsset from "@/assets/models/revuelto-race.glb.asset.json";
 import m4Asset from "@/assets/models/bmw-m4-traffic.glb.asset.json";
 import shelbyAsset from "@/assets/models/shelby-police-traffic.glb.asset.json";
 import mustangAsset from "@/assets/models/mustang-gt-traffic.glb.asset.json";
@@ -143,7 +143,7 @@ function batchCar(root: THREE.Group): THREE.Group {
   const groups = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
   root.traverse((o) => {
     if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
-    const geo = o.geometry.clone().applyMatrix4(o.matrixWorld).toNonIndexed();
+    const geo = o.geometry.clone();
     // Meshopt may quantize the same attribute differently on separate parts.
     // Read normalized values before merging, so no car parts disappear.
     for (const [name, attribute] of Object.entries(geo.attributes)) {
@@ -155,14 +155,19 @@ function batchCar(root: THREE.Group): THREE.Group {
       }
       geo.setAttribute(name, new THREE.BufferAttribute(values, attribute.itemSize));
     }
-    const attributes = Object.keys(geo.attributes).sort().join(",");
+    // Decode quantized positions BEFORE baking transforms: writing a world
+    // position back into Int16 attributes clips the body panels and wheels.
+    geo.applyMatrix4(o.matrixWorld);
+    const expanded = geo.toNonIndexed();
+    geo.dispose();
+    const attributes = Object.keys(expanded.attributes).sort().join(",");
     const key = `${o.material.uuid}:${attributes}`;
     let group = groups.get(key);
     if (!group) {
       group = { material: o.material, geometries: [] };
       groups.set(key, group);
     }
-    group.geometries.push(geo);
+    group.geometries.push(expanded);
   });
   const result = new THREE.Group();
   for (const { material, geometries } of groups.values()) {
