@@ -1,5 +1,5 @@
 // Rendering quality only; simulation and traffic density never change.
-export function phoneProfile(device: { userAgent: string; memory?: number; cores: number; touch: boolean }) {
+export function phoneProfile(device: { userAgent: string; memory?: number | undefined; cores: number; touch: boolean }) {
   return /SM-A115|Galaxy A11/i.test(device.userAgent) ||
     (device.touch && (device.memory === undefined || device.memory <= 4 || device.cores <= 8));
 }

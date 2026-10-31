@@ -247,6 +247,13 @@ export function RacingGame() {
           );
 
           engineRef.current = engine;
+          if (import.meta.env.DEV) {
+            (window as Window & { __game?: unknown }).__game = {
+              get state() { return engine.snapshot(0); },
+              sim: (seconds: number) => engine.debugSim(seconds),
+              input: engine.input,
+            };
+          }
           engine.setThreeD(true);
           engine.setBottomInset(CONTROLS_H);
           const el = containerRef.current;
@@ -282,6 +289,7 @@ export function RacingGame() {
       ro?.disconnect();
       engineRef.current?.stop();
       engineRef.current = null;
+      if (import.meta.env.DEV) delete (window as Window & { __game?: unknown }).__game;
       scene3d?.dispose();
       audio.dispose();
       audioRef.current = null;
