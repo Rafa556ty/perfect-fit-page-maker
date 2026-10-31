@@ -4,12 +4,13 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
-import revueltoAsset from "@/assets/models/revuelto.glb.asset.json";
-import m4Asset from "@/assets/models/bmw-m4.glb.asset.json";
-import shelbyAsset from "@/assets/models/shelby-police.glb.asset.json";
-import mustangAsset from "@/assets/models/mustang-gt.glb.asset.json";
-import jeskoAsset from "@/assets/models/jesko.glb.asset.json";
+import revueltoAsset from "@/assets/models/revuelto-race.glb.asset.json";
+import m4Asset from "@/assets/models/bmw-m4-traffic.glb.asset.json";
+import shelbyAsset from "@/assets/models/shelby-police-traffic.glb.asset.json";
+import mustangAsset from "@/assets/models/mustang-gt-traffic.glb.asset.json";
+import jeskoAsset from "@/assets/models/jesko-traffic.glb.asset.json";
 
 export type ModelKey = "revuelto" | "m4" | "police" | "mustang" | "jesko";
 
@@ -136,6 +137,52 @@ export function normalizeCar(scene: THREE.Group, spec: ModelSpec): THREE.Group {
   return pivot;
 }
 
+/** Static cars share one draw per compatible material, not one per tiny part. */
+function batchCar(root: THREE.Group): THREE.Group {
+  root.updateMatrixWorld(true);
+  const groups = new Map<string, { material: THREE.Material; geometries: THREE.BufferGeometry[] }>();
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || Array.isArray(o.material)) return;
+    const geo = o.geometry.clone();
+    // Meshopt may quantize the same attribute differently on separate parts.
+    // Read normalized values before merging, so no car parts disappear.
+    for (const [name, attribute] of Object.entries(geo.attributes)) {
+      const values = new Float32Array(attribute.count * attribute.itemSize);
+      for (let i = 0; i < attribute.count; i++) {
+        for (let component = 0; component < attribute.itemSize; component++) {
+          values[i * attribute.itemSize + component] = attribute.getComponent(i, component);
+        }
+      }
+      geo.setAttribute(name, new THREE.BufferAttribute(values, attribute.itemSize));
+    }
+    // Decode quantized positions BEFORE baking transforms: writing a world
+    // position back into Int16 attributes clips the body panels and wheels.
+    geo.applyMatrix4(o.matrixWorld);
+    const expanded = geo.toNonIndexed();
+    geo.dispose();
+    const attributes = Object.keys(expanded.attributes).sort().join(",");
+    const key = `${o.material.uuid}:${attributes}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { material: o.material, geometries: [] };
+      groups.set(key, group);
+    }
+    group.geometries.push(expanded);
+  });
+  const result = new THREE.Group();
+  for (const { material, geometries } of groups.values()) {
+    const merged = mergeGeometries(geometries);
+    if (merged) {
+      const mesh = new THREE.Mesh(merged, material);
+      mesh.name = material.name;
+      mesh.castShadow = true;
+      result.add(mesh);
+    }
+    for (const geometry of geometries) geometry.dispose();
+  }
+  return result.children.length ? result : root;
+}
+
 /** Normalised, shared template for one car model (clone it per instance). */
 export function loadCar(key: ModelKey): Promise<THREE.Group> {
   let p = cache.get(key);
@@ -153,7 +200,7 @@ export function loadCar(key: ModelKey): Promise<THREE.Group> {
             m.frustumCulled = true;
           }
         });
-        return normalizeCar(scene, spec);
+        return batchCar(normalizeCar(scene, spec));
       });
     p.catch(() => cache.delete(key));
     cache.set(key, p);

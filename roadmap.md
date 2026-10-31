@@ -1,5 +1,10 @@
 # Roadmap — Versão 2.0 DEMO
 
+## Finalização 3D e celular
+- [ ] Completar e conferir os modelos 3D enviados no trânsito.
+- [ ] Otimizar gráficos e resolução para celulares básicos, incluindo Galaxy A11.
+- [ ] Verificar corrida 3D, controles e testes.
+
 - [x] Import base from GitHub (Lamborghini-nova)
 - [x] Engine sound from real recorded V12 samples (idle, load, rev, redline hold) — no oscillator synth
 - [x] Shift bang + exhaust pops + flames; 8th gear holds redline loop

@@ -287,6 +287,13 @@ export class RacingEngine {
     };
   }
 
+  /** Dev-only fixed stepping for checking the actual game on software WebGL. */
+  debugSim(seconds: number) {
+    if (!import.meta.env.DEV) return;
+    for (let t = 0; t < Math.min(seconds, 120); t += 1 / 60) this.update(1 / 60);
+    this.onRender?.(this.snapshot(1 / 60));
+  }
+
   setMode(mode: "free" | "police") {
     this.mode = mode;
   }
