@@ -7,6 +7,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import type { RenderCar, RenderSnapshot } from "./engine";
 import type { CarType } from "./traffic";
 import { loadCar, type ModelKey } from "./models3d";
+import { AdaptiveResolution, phoneProfile } from "./quality";
 import { BRIDGES, CYCLE, SIGN_GANTRIES, SPEED_RADARS, TUNNEL_FROM, TUNNEL_TO, cyc, inTunnel, lightsOn, nightAmount, rainAmount } from "./world";
 
 const LANE_W = 3.6;
@@ -41,7 +42,9 @@ function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => 
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  draw(c.getContext("2d")!);
+    const context = c.getContext("2d");
+    if (!context) throw new Error("Canvas context unavailable");
+    draw(context);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -51,7 +54,7 @@ function canvasTex(w: number, h: number, draw: (g: CanvasRenderingContext2D) => 
 
 function noise(g: CanvasRenderingContext2D, w: number, h: number, n: number, colors: string[], size: [number, number]) {
   for (let i = 0; i < n; i++) {
-    g.fillStyle = colors[i % colors.length]!;
+    g.fillStyle = colors[i % colors.length] ?? "#45474c";
     const s = size[0] + Math.random() * (size[1] - size[0]);
     g.fillRect(Math.random() * w, Math.random() * h, s, s);
   }
@@ -195,6 +198,18 @@ type CarRig = {
 };
 
 export class Scene3D {
+  private low = phoneProfile({ userAgent: navigator.userAgent, memory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory, cores: navigator.hardwareConcurrency || 4, touch: navigator.maxTouchPoints > 0 });
+  private quality = new AdaptiveResolution();
+  private width = 1;
+  private height = 1;
+  private lastFrame = 0;
+  private baseDpr = 1;
+  private rainColor = new THREE.Color(0x707a86);
+  private seen = new Set<RenderCar>();
+  private matrix = new THREE.Matrix4();
+  private quaternion = new THREE.Quaternion();
+  private scaleVector = new THREE.Vector3();
+  private positionVector = new THREE.Vector3();
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(62, 1, 0.1, 900);
@@ -264,13 +279,14 @@ export class Scene3D {
     private overlay: HTMLElement | null,
     private onReady?: () => void,
   ) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: dpr < 1.5, powerPreference: "high-performance" });
+    const dpr = Math.min(window.devicePixelRatio || 1, this.low ? 1 : 1.5);
+    this.baseDpr = dpr;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !this.low && dpr < 1.5, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(dpr);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !this.low;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -324,7 +340,7 @@ export class Scene3D {
     this.buildWorld();
 
     // Rain: streaks in a box around the camera
-    const N = 700;
+    const N = this.low ? 180 : 500;
     this.rainPos = new Float32Array(N * 6);
     for (let i = 0; i < N; i++) this.resetDrop(i, true);
     const rg = new THREE.BufferGeometry();
@@ -333,7 +349,7 @@ export class Scene3D {
     this.rain.frustumCulled = false;
     this.scene.add(this.rain);
 
-    for (let i = 0; i < 160; i++) {
+    for (let i = 0; i < (this.low ? 32 : 96); i++) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, transparent: true, depthWrite: false }));
       s.visible = false;
       this.sprites.push(s);
@@ -345,7 +361,7 @@ export class Scene3D {
 
   private makeHeadlight() {
     const s = new THREE.SpotLight(0xfff4e0, 0, 90, 0.42, 0.55, 1.2);
-    this.scene.add(s, s.target);
+    if (!this.low) this.scene.add(s, s.target);
     return s;
   }
 
@@ -468,7 +484,7 @@ export class Scene3D {
       g.add(beam);
       const sign = new THREE.Mesh(
         new THREE.BoxGeometry(6.5, 2.4, 0.15),
-        new THREE.MeshStandardMaterial({ map: signTexture(signs[i]!), roughness: 0.5, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: null }),
+        new THREE.MeshStandardMaterial({ map: signTexture(signs[i] ?? []), roughness: 0.5, emissive: 0xffffff, emissiveIntensity: 0, emissiveMap: null }),
       );
       sign.position.set(-1.8, 6.2, 0.35);
       g.add(sign);
@@ -561,6 +577,7 @@ export class Scene3D {
           .catch((e) => console.error(`model ${k} failed`, e)),
       ),
     );
+    this.canvas.dataset["modelsReady"] = "true";
   }
 
   private setupPlayer(car: THREE.Group) {
@@ -601,10 +618,19 @@ export class Scene3D {
     for (const tip of tips) this.flames.push(this.makeFlame(car, tip));
     this.headL.position.set(-0.7, 0.75, -2.2);
     this.headR.position.set(0.7, 0.75, -2.2);
-    car.add(this.headL, this.headR);
+    if (!this.low) car.add(this.headL, this.headR);
     this.headL.target.position.set(-0.9, 0, -30);
     this.headR.target.position.set(0.9, 0, -30);
-    car.add(this.headL.target, this.headR.target);
+    if (!this.low) car.add(this.headL.target, this.headR.target);
+    // Soft contact shadows keep the car grounded without another render pass.
+    this.addContactShadow(car, 2.1, 4.8);
+    for (const x of [-0.7, 0.7]) {
+      const beam = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 25), new THREE.MeshBasicMaterial({ map: this.sparkTex, color: 0xffefd0, transparent: true, opacity: 0.13, depthWrite: false, blending: THREE.AdditiveBlending }));
+      beam.rotation.x = -Math.PI / 2;
+      beam.position.set(x, 0.025, -14);
+      beam.name = "road-beam";
+      car.add(beam);
+    }
     this.player = car;
     this.scene.add(car);
   }
@@ -613,7 +639,7 @@ export class Scene3D {
     const g = new THREE.Group();
     g.position.copy(tip);
     const mk = (radius: number, core: number) => {
-      const geo = new THREE.CylinderGeometry(radius * 0.25, radius, 1, 20, 12, true);
+      const geo = new THREE.CylinderGeometry(radius * 0.25, radius, 1, this.low ? 10 : 20, this.low ? 5 : 12, true);
       // base at the tip, flame extends along +Z (backward)
       geo.translate(0, 0.5, 0);
       geo.rotateX(Math.PI / 2);
@@ -653,7 +679,7 @@ export class Scene3D {
     g.add(glow);
     const light = new THREE.PointLight(0xff7a2a, 0, 7, 2);
     light.position.z = 0.4;
-    g.add(light);
+    if (!this.low) g.add(light);
     g.visible = false;
     car.add(g);
     return { group: g, outer: outer.mat, core: core.mat, glow, light };
@@ -670,7 +696,9 @@ export class Scene3D {
     b.position.set(0.3, top + 0.04, 0.2);
     this.policeRed.position.set(-0.4, top + 0.4, 0.2);
     this.policeBlue.position.set(0.4, top + 0.4, 0.2);
-    car.add(r, b, this.policeRed, this.policeBlue);
+    car.add(r, b);
+    if (!this.low) car.add(this.policeRed, this.policeBlue);
+    this.addContactShadow(car, 2, 4.6);
     car.visible = false;
     this.police = car;
     this.scene.add(car);
@@ -685,6 +713,7 @@ export class Scene3D {
     const tpl = this.templates.get(model);
     if (!tpl) return null;
     const root = tpl.clone(true);
+    this.addContactShadow(root, 2, 4.6);
     const box = new THREE.Box3().setFromObject(root);
     const rearZ = box.max.z - 0.02;
     const w = (box.max.x - box.min.x) / 2;
@@ -714,6 +743,8 @@ export class Scene3D {
   }
 
   resize(w: number, h: number) {
+    this.width = w;
+    this.height = h;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -721,6 +752,12 @@ export class Scene3D {
 
   // ---------- per frame ----------
   render = (s: RenderSnapshot) => {
+    const now = performance.now();
+    if (this.lastFrame && this.low && this.quality.sample((now - this.lastFrame) / 1000, document.hidden)) {
+      this.renderer.setPixelRatio(this.baseDpr * this.quality.scale);
+      this.renderer.setSize(this.width, this.height, false);
+    }
+    this.lastFrame = now;
     const dt = Math.min(s.dt, 0.05);
     this.time += dt;
     const { ppm } = s;
@@ -736,13 +773,13 @@ export class Scene3D {
     // --- sky, fog, light levels
     const dusk = Math.min(1, night * 2) * (1 - night);
     this.sky.copy(this.dayColor).lerp(this.duskColor, dusk * 0.8).lerp(this.nightColor, night);
-    this.sky.lerp(new THREE.Color(0x707a86), rain * 0.6 * (1 - night));
+    this.sky.lerp(this.rainColor, rain * 0.6 * (1 - night));
     const tunnelBlend = this.tunnelFactor(pz);
     this.fog.color.copy(this.sky).lerp(this.tunnelColor, tunnelBlend);
     this.fog.near = lerp(60, 25, Math.max(rain, night * 0.5));
     this.fog.far = lerp(VIEW_AHEAD - 10, 150, rain);
     this.sun.intensity = lerp(2.6, 0.04, night) * (1 - rain * 0.6) * (1 - tunnelBlend);
-    this.hemi.intensity = lerp(0.95, 0.1, night) * (1 - rain * 0.3) * lerp(1, 0.25, tunnelBlend);
+    this.hemi.intensity = lerp(0.95, 0.38, night) * (1 - rain * 0.2) * lerp(1, 0.65, tunnelBlend);
     this.scene.environmentIntensity = lerp(0.9, 0.12, night) * lerp(1, 0.35, tunnelBlend);
     this.roadMat.roughness = lerp(0.88, 0.25, rain);
     this.roadMat.color.setScalar(lerp(1, 0.55, rain));
@@ -769,6 +806,7 @@ export class Scene3D {
       p.rotation.z = s.player.rot * 0.25;
       for (const m of this.playerTail) m.emissiveIntensity = s.braking ? 4.5 : lights ? 1.6 : 0.5;
       for (const m of this.playerHead) m.emissiveIntensity = lights ? 3 : 0.6;
+      for (const child of p.children) if (child.name === "road-beam") child.visible = lights;
       const beam = s.highBeam ? 260 : lights ? 120 : 0;
       this.headL.intensity = this.headR.intensity = beam;
       this.headL.distance = this.headR.distance = s.highBeam ? 160 : 90;
@@ -776,10 +814,11 @@ export class Scene3D {
     }
 
     // --- traffic
-    const seen = new Set<RenderCar>();
+    const seen = this.seen;
+    seen.clear();
     for (const t of s.traffic) {
       const z = toZ(t.y);
-      if (z < -VIEW_AHEAD - 20 || z > VIEW_BEHIND) continue;
+      if (z < -(this.low ? 150 : VIEW_AHEAD + 20) || z > VIEW_BEHIND) continue;
       seen.add(t);
       let rig = this.active.get(t);
       if (!rig) {
@@ -842,6 +881,11 @@ export class Scene3D {
     }
 
     this.renderer.render(this.scene, this.camera);
+    if (import.meta.env.DEV) {
+      this.canvas.dataset["drawCalls"] = String(this.renderer.info.render.calls);
+      this.canvas.dataset["triangles"] = String(this.renderer.info.render.triangles);
+      this.canvas.dataset["quality"] = `${this.low ? "mobile" : "standard"}:${this.quality.scale.toFixed(2)}`;
+    }
     if (!this.ready && this.player) {
       this.ready = true;
       this.onReady?.();
@@ -889,16 +933,16 @@ export class Scene3D {
   }
 
   private layoutScenery(pz: number, night: number) {
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const sc = new THREE.Vector3();
-    const pos = new THREE.Vector3();
+    const m = this.matrix;
+    const q = this.quaternion;
+    const sc = this.scaleVector;
+    const pos = this.positionVector;
     const tunnelAt = (z: number) => inTunnel(z);
 
     // guardrail posts every 4 m
     let i = 0;
     const first = Math.floor((pz - VIEW_BEHIND) / 4);
-    for (let n = first; i < this.posts.count - 1; n++) {
+    for (let n = first; i < 159; n++) {
       const z = n * 4;
       if (z > pz + 160) break;
       for (const s of [-1, 1]) {
@@ -912,7 +956,7 @@ export class Scene3D {
     // trees: one slot every 7 m per side, skipped in tunnels
     i = 0;
     const tFirst = Math.floor((pz - VIEW_BEHIND) / 7);
-    for (let n = tFirst; i < this.trunks.count - 1; n++) {
+    for (let n = tFirst; i < 139; n++) {
       const z = n * 7;
       if (z > pz + VIEW_AHEAD) break;
       for (const s of [-1, 1]) {
@@ -935,7 +979,7 @@ export class Scene3D {
     // street lamps every 45 m alternating sides
     i = 0;
     const lFirst = Math.floor((pz - VIEW_BEHIND) / 45);
-    for (let n = lFirst; i < this.lampPoles.count; n++) {
+    for (let n = lFirst; i < 24; n++) {
       const z = n * 45;
       if (z > pz + VIEW_AHEAD) break;
       if (tunnelAt(z)) continue;
@@ -992,8 +1036,10 @@ export class Scene3D {
       // keep the glow sprite round despite the group's z stretch
       f.glow.scale.set(0.55 * flick, 0.55 * flick, 0.55 / L);
       for (const mat of [f.outer, f.core]) {
-        mat.uniforms["uTime"]!.value = this.time;
-        mat.uniforms["uIntensity"]!.value = this.flameAmt * flick * 1.4;
+        const time = mat.uniforms["uTime"];
+        const intensity = mat.uniforms["uIntensity"];
+        if (time) time.value = this.time;
+        if (intensity) intensity.value = this.flameAmt * flick * 1.4;
       }
       f.light.intensity = this.flameAmt * flick * 14;
     }
@@ -1004,7 +1050,8 @@ export class Scene3D {
     for (const q of s.particles) {
       if (i >= this.sprites.length) break;
       if (q.kind === "flame") continue; // drawn by the 3D exhaust flames
-      const sp = this.sprites[i++]!;
+      const sp = this.sprites[i++];
+      if (!sp) break;
       const mat = sp.material;
       const life = q.life / q.max;
       sp.visible = true;
@@ -1022,7 +1069,10 @@ export class Scene3D {
       }
       mat.opacity = q.alpha * (1 - life);
     }
-    for (; i < this.sprites.length; i++) this.sprites[i]!.visible = false;
+    for (; i < this.sprites.length; i++) {
+      const sprite = this.sprites[i];
+      if (sprite) sprite.visible = false;
+    }
   }
 
   private updateRain(rain: number, dt: number, speed: number, tunnel: boolean) {
@@ -1036,13 +1086,20 @@ export class Scene3D {
     const a = this.rainPos;
     for (let i = 0; i < a.length / 6; i++) {
       const o = i * 6;
-      a[o + 1]! -= fall;
-      a[o + 4]! -= fall;
-      a[o + 2]! += rush;
-      a[o + 5]! += rush;
-      if (a[o + 1]! < 0 || a[o + 2]! > 10) this.resetDrop(i, false);
+      a[o + 1] = (a[o + 1] ?? 0) - fall;
+      a[o + 4] = (a[o + 4] ?? 0) - fall;
+      a[o + 2] = (a[o + 2] ?? 0) + rush;
+      a[o + 5] = (a[o + 5] ?? 0) + rush;
+      if ((a[o + 1] ?? 0) < 0 || (a[o + 2] ?? 0) > 10) this.resetDrop(i, false);
     }
     (this.rain.geometry.attributes["position"] as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  private addContactShadow(car: THREE.Group, width: number, length: number) {
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(width, length), new THREE.MeshBasicMaterial({ map: this.smokeTex, color: 0x000000, transparent: true, opacity: 0.55, depthWrite: false }));
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = 0.018;
+    car.add(shadow);
   }
 
   dispose() {
